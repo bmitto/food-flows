@@ -1,0 +1,159 @@
+#-------------------------------------------------------------------------------
+# Name:   AvocadoImports
+
+# Purpose: Network flow of avocado imports from around the world
+
+# Data: http://faostat3.fao.org/home/E
+
+# Year: 2012
+
+# Author: @bmitto
+#-------------------------------------------------------------------------------
+import numpy as np
+import pysal.esda.mapclassify as mapclassify
+
+
+def norm(data, bins):
+    """ classify the weights based on user defined bin class dict data could be
+     total imports(i.e node size) or import quantity (i.e edge width)"""
+
+    wgt = [ky for ky,wt in bins.iteritems() if (data >= wt[0] and data <= wt[1])]
+
+    return max(wgt)
+
+#ciat
+
+# READING THE DATA -------------------------------------------------------------
+
+from csv import DictReader
+
+# node file contains list of countries and coordinates of their capital cities
+nodeFile = "countries.csv"
+
+# edge file contains countries importing avocadoes and the quantities imported
+edgeFile = "avocado_imports.csv"
+
+# create a dictionary of unique country names alongside total volume of imports
+nodeData = dict() # total imports are computed from edgeFile
+
+# create a dictionary of country names with coordinates of cities
+coordsData = dict()
+
+edgeData = []
+
+with open(edgeFile, "rb") as ef, open(nodeFile, "rb") as nf:
+    edgeReader = DictReader(ef)
+    edgeHeader = edgeReader.fieldnames
+
+    # using iso codes for country names, sum up total volume of imports
+    for row in list(edgeReader):
+        vol = int(row['import quantity'])
+        importer = row['importerISO']
+        exporter = row['exporterISO']
+
+        edgeData.append([importer, exporter, vol])
+        # check if country exist in node data, then sum its imports or create it
+        if importer in nodeData:
+            vol += nodeData[importer]
+            nodeData[importer] = vol
+        else:
+            nodeData[importer] = vol
+
+        if exporter in nodeData:
+            nodeData[exporter] = nodeData[exporter]
+        else:
+            nodeData[exporter] = 0 # countries exporting but not importing
+
+    # using iso codes, extract coordinates of capital cities
+    for row in list(DictReader(nf)):
+        coordsData[row['Country']] = (float(row['lat_y']), float(row['long_x']))
+
+# MAPPING THE DATA -------------------------------------------------------------
+from mpl_toolkits.basemap import Basemap
+import matplotlib.pyplot as plt
+
+#plt.figure(figsize=(20,10))
+# create a basemap instance based on miller projection system
+mp = Basemap(projection='mill', lat_0=0, lon_0=0, llcrnrlon=-126., llcrnrlat=-60.,
+            urcrnrlon=66, urcrnrlat=64.)
+
+# ----------------NODES --------------------------------------------------------
+# First we create a weighting sequence. we could have just mapped the actual vals
+# but matplot lib has trouble mapping extremely large symbols, hence the need to
+# classify then map our classified bins to arbitrary user defined classes
+
+totVals = np.array([val for val in nodeData.itervalues()]) # gets sum of imports per country
+nbN = mapclassify.Natural_Breaks(totVals, 5) # generates jenks nat break of 5 classes
+userDefN = [5, 15, 25, 35, 45]
+nbBins = nbN.bins
+
+nodeSize = {}
+for i in range(len(userDefN)):
+    if i == 0:
+        nodeSize[userDefN[i]] = [0, nbBins[i]]
+    else:
+        nodeSize[userDefN[i]] = [nbBins[i-1]+1, nbBins[i]]
+
+# actual mapping of nodes
+for node, vol in nodeData.iteritems():
+    lon, lat = mp(coordsData[node][1], coordsData[node][0]) # lat==y, lon==x
+    size = norm(vol, nodeSize)
+    mp.plot(lon, lat, color = 'r', marker='o', markersize=size, alpha=0.5)
+
+# ----------------- EDGES ------------------------------------------------------
+# Create a weighting sequence
+
+qty = np.array([imp[2] for imp in edgeData]) # gets import quantities
+nbE = mapclassify.Natural_Breaks(qty, 5) # edge natural breaks
+userDef = [2, 4, 6, 8, 10]
+nbBinsE = nbE.bins
+
+edgeWidth = {}
+for i in range(len(userDef)):
+    if i == 0:
+        edgeWidth[userDef[i]] = [0, nbBinsE[i]]
+    else:
+        edgeWidth[userDef[i]] = [nbBinsE[i-1]+1, nbBinsE[i]]
+
+# Actual mapping
+for edge in edgeData:
+    impLon, impLat = (coordsData[edge[0]][1], coordsData[edge[0]][0])
+    expLon, expLat = (coordsData[edge[1]][1], coordsData[edge[1]][0])
+    width = norm(edge[2], edgeWidth)
+    mp.drawgreatcircle(impLon, impLat, expLon, expLat, linewidth=width,color='r',alpha=0.2)
+
+# --------------LEGENDS & OTHER CARTO VARIABLES--------------------------------
+
+# draw country borders, fill colors
+mp.drawmapboundary() #fill_color='aqua'
+mp.fillcontinents(color='0.5', lake_color='#CAE1FF') #color='coral', lake_color='aqua'
+mp.drawcoastlines(linewidth=0.1, color='w')
+mp.drawcountries(linewidth=0.2, color='w')
+
+# draw legend for the points
+# adapted from: http://jonathanbright.org/2014/08/12/point-size-legends-in-matplotlib-and-basemap-plots/comment-page-1/
+l1 = plt.scatter([],[], s=userDefN[0], edgecolors='none', c='g')
+l2 = plt.scatter([],[], s=userDefN[1], edgecolors='none', c='g')
+l3 = plt.scatter([],[], s=userDefN[2], edgecolors='none', c='g')
+l4 = plt.scatter([],[], s=userDefN[3], edgecolors='none', c='g')
+l5 = plt.scatter([],[], s=userDefN[4], edgecolors='none', c='g')
+labels = ["<=" + str(lbl) for lbl in nbBins]
+leg = plt.legend([l1, l2, l3, l4, l5], labels, ncol=2, frameon=True, fontsize=8,
+                handlelength=2, loc = 4, borderpad = 1.0, handletextpad=1,
+                title='Total Imports', scatterpoints = 1)
+
+ax = plt.gca().add_artist(leg)
+
+# draw legend for the lines
+plt.plot([ ], [ ], 'r-', lw=userDef[0],label="<="+str(nbBinsE[0]))
+plt.plot([ ], [ ], 'r-', lw=userDef[1],label="<="+str(nbBinsE[1]))
+plt.plot([ ], [ ], 'r-', lw=userDef[2],label="<="+str(nbBinsE[2]))
+plt.plot([ ], [ ], 'r-', lw=userDef[3],label="<="+str(nbBinsE[3]))
+plt.plot([ ], [ ], 'r-', lw=userDef[4],label="<="+str(nbBinsE[4]))
+
+plt.legend(loc = 3, fontsize=8, title='Qtty import')
+
+# add title and display output
+plt.title("AVOCADO IMPORTS IN 2012")
+#plt.savefig("avocadoimports2012.jpg", dpi = 300, transparent = True)
+plt.show()
